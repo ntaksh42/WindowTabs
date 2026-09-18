@@ -35,8 +35,15 @@ open System.Windows.Forms
 // where the same failure would have moved windows to the wrong display.
 module ScreenCache =
     let private screensField =
-        try typeof<Screen>.GetField("screens", Reflection.BindingFlags.Static ||| Reflection.BindingFlags.NonPublic)
-        with _ -> null
+        // "screens" on .NET Framework; renamed to "s_screens" in the .NET 10
+        // WinForms rewrite. Tried in that order so this keeps working on
+        // either runtime instead of only ever finding the old name.
+        let byName name =
+            try typeof<Screen>.GetField(name, Reflection.BindingFlags.Static ||| Reflection.BindingFlags.NonPublic)
+            with _ -> null
+        match byName "screens" with
+        | null -> byName "s_screens"
+        | field -> field
 
     let refresh() =
         try
