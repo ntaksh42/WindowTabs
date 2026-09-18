@@ -52,8 +52,8 @@
   "EnableCtrlNumberHotKey": "Habilitar Ctrl+1, ...Ctrl+9 para activar pestañas",
   "EnableHoverActivate": "Activar pestaña al pasar el cursor por encima",
 
-  "TabPositionByDefault": "Posición de las pestañas",
-  "ChangeTabPositionOnSnap": "Posición de pestañas al acoplar a izquierda/derecha",
+  "TabPositionByDefault": "Disposición de las pestañas",
+  "ChangeTabPositionOnSnap": "Disposición de pestañas al acoplar a izquierda/derecha",
   "ChangeTabPositionOnSnapWhenUniform": "Cambiar cuando todas las pestañas del grupo comparten la misma posición",
   "ChangeTabPositionOnSnapNever": "No cambiar",
   "TabVerticalDirection": "Dirección vertical de las pestañas",
@@ -67,7 +67,9 @@
 
   "HideTabsOnFullscreen": "Ocultar pestañas cuando la ventana está en pantalla completa",
   "HideTabsWhileMoving": "Ocultar pestañas al mover una ventana",
+  "LockWindowPosition": "Impedir mover ventanas y redimensionarlas desde el borde superior",
   "SnapTabHeightMargin": "Agregar margen de alto de pestaña al acoplar",
+  "SnapOnDragDetach": "Acoplar al borde de la pantalla al arrastrar una pestaña a una nueva ventana",
   "NextTab": "Pestaña siguiente",
   "PrevTab": "Pestaña anterior",
 

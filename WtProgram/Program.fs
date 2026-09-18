@@ -234,7 +234,7 @@ module RestoreTrace =
 #endif
 
 type Program() as this =
-    let version = "ss_2026.09.12"
+    let version = "ss_2026.09.18"
     let isStandAlone = System.Diagnostics.Debugger.IsAttached
 
     let Cell = CellScope()
@@ -265,6 +265,9 @@ type Program() as this =
     let isDisabledCell = Cell.create(false)
     let isRestoringTabGroups = Cell.create(false)
     let needsRestoreOnStartup = Cell.create(false)
+    // A window pass that was skipped because a group was being moved or
+    // resized, and has to be made up for once the loop ends.
+    let mutable deferredWindowPass = false
     let llMouseEvent = Event<_>()
 
     // case 727 outlook calendar items appear behind outlook main window
@@ -318,6 +321,7 @@ type Program() as this =
     let inSessionEnd = Cell.create(false)
     let isSubscribed = Cell.create(Map2<IntPtr,IDisposable>())
     let isDroppedAndAwaitingGrouping = Cell.create(Set2())
+    let pendingDragSnapMargins = Cell.create(Map2<IntPtr, bool>())
     // Case C: hwnds recently placed into a group via the multi-select
     // drag-detach path. removeUntabableWindows skips these for a short
     // grace period so the dragExit off-screen parking doesn't cause the
@@ -545,6 +549,7 @@ type Program() as this =
 
     let registerShellHooks =
         os.registerShellHooks <| fun (hwnd, shellEvent) ->
+            PerfTrace.count (sprintf "shell.%O" shellEvent)
             match shellEvent with
             | ShellEvent.HSHELL_WINDOWCREATED ->
                 if shellTraceCount < 60 then
@@ -574,6 +579,9 @@ type Program() as this =
     // Retry of refused registrations while the same window stays in front.
     // See the hot keys section (scheduleHotKeyRetry).
     let hotKeyRetryTimer = new System.Windows.Forms.Timer(Interval = 1000)
+    // Once a second: the window pass a move/size loop put off, and the perf
+    // line of a Debug build (see Shared/PerfTrace.fs).
+    let catchUpTimer = new System.Windows.Forms.Timer(Interval = 1000)
     let hotKeyRetryLimit = 10
     let mutable hotKeyRetriesLeft = hotKeyRetryLimit
     // The fields dropped as duplicates at the last sync, so the Debug line
@@ -593,6 +601,14 @@ type Program() as this =
         // set is held the moment a tabbed window is back in front - the
         // dialog need not be closed.
         hotKeyRetryTimer.Tick.Add <| fun _ -> this.retryHotKeys()
+        catchUpTimer.Tick.Add <| fun _ ->
+            // Groups and tabs describe the state a leak would show up in: both
+            // should come back down when windows close.
+            PerfTrace.flush version
+            // A pass put off during a move/size loop is made up for here, as
+            // soon as no group is in one.
+            this.catchUpDeferredWindowPass()
+        catchUpTimer.Start()
         foregroundHotKeyHook <- Some(
             os.setSingleWinEvent WinEvent.EVENT_SYSTEM_FOREGROUND (fun _ -> this.onForegroundChanged()))
         Services.settings.notifyValue HotKeyPolicy.enableCtrlNumberSetting (fun _ -> this.syncHotKeys())
@@ -1383,7 +1399,31 @@ type Program() as this =
                     | None -> ()
         with _ -> ()
 
-    member this.updateAppWindows() =
+    /// Runs a window pass that a move/size loop had put off, once no group is
+    /// in one any more. Called once a second.
+    member this.catchUpDeferredWindowPass() =
+        if deferredWindowPass then
+            try
+                if not (this.desktop.groups.any(fun g -> g.isInMoveSizeThreadSafe)) then
+                    this.updateAppWindows()
+            with _ -> ()
+
+    member this.updateAppWindows() = PerfTrace.time "updateAppWindows" <| fun () ->
+        // A pass over every window on the desktop takes a few hundred
+        // milliseconds when several hundred are open, and Office creates and
+        // destroys windows of its own throughout a resize - each one asking
+        // for another pass, which is what made dragging a group's top edge
+        // crawl. While a window of a group is in its move/size loop the pass
+        // is put off; the loop's end asks for it again (WindowGroup's
+        // onExitMoveSize reaches here through the placement update), and the
+        // ten-second timer is the backstop.
+        let inMoveSize =
+            try this.desktop.groups.any(fun g -> g.isInMoveSizeThreadSafe) with _ -> false
+        if inMoveSize then
+            PerfTrace.count "updateAppWindows.deferred"
+            deferredWindowPass <- true
+        else
+        deferredWindowPass <- false
         this.expireStaleTabMonitoringSuspension()
         if updateTraceCount < 60 || this.desktop.isDragging || this.isTabMonitoringSuspended then
             updateTraceCount <- updateTraceCount + 1
@@ -1391,19 +1431,28 @@ type Program() as this =
                 DragTrace.log (fun () -> sprintf "updateAppWindows #%d: isDragging=%b suspended=%b disabled=%b shutdown=%b restorePending=%b"
                                               updateTraceCount this.desktop.isDragging this.isTabMonitoringSuspended isDisabledCell.value inShutdown.value needsRestoreOnStartup.value)
         if this.desktop.isDragging.not then
-            // If restoration is needed on startup, do it first before auto-grouping
-            if needsRestoreOnStartup.value then
+            // If restoration is needed on startup, do it first before auto-grouping.
+            // Not while disabled: the snapshot is kept for the moment the user
+            // switches WindowTabs back on, and rebuilding the groups behind a
+            // ticked "disable" box is exactly what the switch is there to prevent.
+            if needsRestoreOnStartup.value && isDisabledCell.value.not then
                 this.restoreTabGroupsFromSettings()
                 needsRestoreOnStartup.set(false)
 
             if inShutdown.value.not && isDisabledCell.value.not then
-                os.windowsInZorder.iter <| fun window ->
+                let windows = PerfTrace.time "windowsInZorder" (fun () -> os.windowsInZorder)
+                PerfTrace.count (sprintf "windowsScanned.%d" (windows.count / 50 * 50))
+                windows.iter <| fun window ->
                     this.ensureWindowIsSubscribed(window)
                     if this.isTabMonitoringSuspended.not then
                         this.ensureWindowIsGrouped(window)
-                this.syncWindowTitles()
+                PerfTrace.time "syncWindowTitles" (fun () -> this.syncWindowTitles())
             this.destroyEmptyGroups()
             this.removeUntabableWindows()
+            // Groups and tabs describe the state a leak would show up in: both
+            // should come back down when windows close.
+            PerfTrace.gauge "groups" this.desktop.groups.length
+            PerfTrace.gauge "tabs" (this.desktop.groups.fold 0 (fun n g -> n + g.windows.count))
 
         // Group membership may have changed above - a window grouped after
         // it came to the front, a group destroyed under the foreground
@@ -1602,14 +1651,28 @@ type Program() as this =
                 // a restore left it there (see the second pass of
                 // adjustChildWindows). Put it back rather than throw it out,
                 // which is how a tab and its window used to vanish together.
+                // Sitting outside every monitor is the other way a window is
+                // left behind. A group parks the windows it is not dragging
+                // just past the bottom right corner of the desktop, and so
+                // does a tab drag; a park that is never undone - the process
+                // was restarted or the group went away in between - leaves one
+                // out there for good, where the user cannot reach it. The same
+                // reseat brings it home.
+                let offEveryMonitor (b: Rect) =
+                    b.width > 0 && b.height > 0 &&
+                    not (Mon.all.any(fun mon ->
+                        let s = mon.displayRect
+                        min s.right b.right > max s.left b.left &&
+                        min s.bottom b.bottom > max s.top b.top))
                 let stranded =
                     untabbable &&
                     window.isWindow && window.isVisible && not window.isMinimized && not window.isCloaked &&
-                    (let b = window.bounds in b.x <= -30000 || b.y <= -30000) &&
+                    (let b = window.bounds in b.x <= -30000 || b.y <= -30000 || offEveryMonitor b) &&
                     (try Services.filter.getIsTabbingEnabledForProcess window.pid.processPath with _ -> false)
                 if stranded then
-                    RestoreTrace.log (fun () -> sprintf "reseat hwnd=%X group=%X (live window at the iconic position) title=%s"
+                    RestoreTrace.log (fun () -> sprintf "reseat hwnd=%X group=%X (live window left off screen at %A) title=%s"
                                                         (hwnd.ToInt64()) (try gi.hwnd.ToInt64() with _ -> 0L)
+                                                        (let b = window.bounds in (b.x, b.y))
                                                         (match windowInfoCache.value.tryFind(hwnd) with
                                                          | Some((_, t)) -> t
                                                          | None -> ""))
@@ -1760,6 +1823,11 @@ type Program() as this =
         //need to add this now so we don't end up creating another group for it while waiting for the WgnWindowAdded notification
         isDroppedAndAwaitingGrouping.map(fun s -> s.remove hwnd)
         let withDelay = not isDropped && isNewGroup && delayTabExeNames.contains(window.pid.exeName)
+        // Consume only the snap-drag metadata; keep the normal drop/regroup,
+        // closed-tab and saved-alignment path for single-tab detach.
+        let snapMargin = pendingDragSnapMargins.value.tryFind(hwnd)
+        pendingDragSnapMargins.map(fun m -> m.remove hwnd)
+        if isNewGroup then snapMargin |> Option.iter (fun margin -> group.snapTabHeightMargin <- margin)
         group.addWindow(hwnd, withDelay)
 
         // Check if this is a "New Tab" launch - position after the invoking tab
@@ -2082,7 +2150,7 @@ type Program() as this =
         hotKeyRetriesLeft <- hotKeyRetriesLeft - 1
         this.syncHotKeys()
 
-    member private this.onForegroundChanged() =
+    member private this.onForegroundChanged() = PerfTrace.time "onForegroundChanged" <| fun () ->
         hotKeyRetriesLeft <- hotKeyRetryLimit
         this.syncHotKeys()
 
@@ -2121,6 +2189,29 @@ type Program() as this =
     member this.notifyNewVersion = notifyNewVersionEvt.Publish
 
     member this.refresh() = this.receive(Timer)
+
+    /// Drops the closed-tab records of applications that tabbing is now off
+    /// for. Switching an application off is not the same as closing its tabs:
+    /// it is no longer an application with tabs at all, and a record left
+    /// behind would hand the old tab name, colours, pin and position back the
+    /// day the user switches it on again. Every record is looked at rather
+    /// than only the application just switched, so anything left by an earlier
+    /// change goes too.
+    member this.forgetClosedTabsOfUntabbedApps() =
+        let stillTabbed (info: ClosedTabInfo) =
+            // A path that cannot be judged is kept: losing a record is worse
+            // than keeping one a moment too long.
+            try Services.filter.getIsTabbingEnabledForProcess info.exePath with _ -> true
+        if closedTabCache.value |> List.exists (stillTabbed >> not) then
+            let dropped = closedTabCache.value |> List.filter (stillTabbed >> not)
+            RestoreTrace.log (fun () ->
+                sprintf "forget %d closed tab(s) of applications tabbing is off for: %s"
+                        dropped.Length
+                        (dropped |> List.map (fun e -> e.exePath) |> List.distinct |> String.concat ", "))
+            closedTabCache.map(List.filter stillTabbed)
+            // The file is written from this cache, so the records only leave
+            // it for good once it is saved.
+            this.saveTabGroupsToSettings()
 
     // Save tab group configuration to settings file for restoration on next
     // startup.
@@ -2203,6 +2294,11 @@ type Program() as this =
                  align = windowAlignment.value.tryFind(hwnd) |> Option.map savedAlignOfTabAlign }
 
     member this.saveTabGroupsToSettings() =
+        // Nothing is grouped while WindowTabs is disabled, so a save here would
+        // replace the record of the user's groups with an empty desktop - and
+        // that record is all that is left to rebuild them from after a restart.
+        // The last snapshot from before the switch stays frozen instead.
+        if isDisabledCell.value then () else
         try
             let json = settingsManager.settingsJson
             let saveNow = DateTime.Now
@@ -2746,6 +2842,13 @@ type Program() as this =
                 // Suspend tab monitoring to prevent auto-grouping during restore
                 this.isTabMonitoringSuspended <- true
 
+                // After a restart there is nothing in memory to restore from -
+                // the switch was thrown in an earlier run - so the groups come
+                // back from the frozen snapshot in the settings, the same way
+                // they do when WindowTabs starts.
+                if savedTabGroups.value.length = 0 then
+                    this.restoreTabGroupsFromSettings()
+
                 // Restore saved tab groups
                 savedTabGroups.value.iter <| fun (hwnds, savedTabPos, savedSnapMargin, pinnedHwnds) ->
                     // Filter out windows that no longer exist or are not visible
@@ -2820,6 +2923,8 @@ type Program() as this =
             // predate AppPath and have not been collapsed yet.
             List2(AppPath.canonicalise paths)
 
+        member x.forgetClosedTabsOfUntabbedApps() = this.forgetClosedTabsOfUntabbedApps()
+
         member x.removeProcessSettings(procPath) =
             // Remove from includedPaths, excludedPaths, autoGroupingPaths
             this.saveSettingsAndUpdateAppWindows <| fun s ->
@@ -2842,8 +2947,12 @@ type Program() as this =
                 hwnds |> List.fold (fun acc h -> acc.add h now) m)
 
     interface IDesktopNotification with
-        member x.dragDrop(hwnd) =
+        member x.dragDrop(hwnd, snapMargin) =
             DragTrace.log (fun () -> sprintf "Program.dragDrop: hwnd=%X" (hwnd.ToInt64()))
+            pendingDragSnapMargins.map <| fun m ->
+                match snapMargin with
+                | Some margin -> m.add hwnd margin
+                | None -> m.remove hwnd
             isDroppedAndAwaitingGrouping.map <| fun s -> s.add hwnd
 
         member x.dragEnd() = 
@@ -2959,6 +3068,7 @@ let main argv =
 
     let program = Program()
     program.run(List2<obj>([
+        CaptionDragPlugin()
         NotifyIconPlugin()
         ExceptionHandlerPlugin()
     ]).map(fun o -> o.cast<IPlugin>()))

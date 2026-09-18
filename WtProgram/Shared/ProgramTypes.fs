@@ -41,10 +41,15 @@ type SettingsRec = {
     hideTabsDelayMilliseconds: int
     hideTabsOnFullscreen: bool
     hideTabsWhileMoving: bool
+    lockWindowPosition: bool
     snapTabHeightMargin: bool
     // "change": on a left/right snap, re-align every tab of a uniformly-aligned
     // group to match the snap direction. "nochange": leave tab alignment alone.
     changeTabPositionOnSnap: string
+    // Dragging tabs out of a strip to form a new group snaps the window to the
+    // left/right/top/bottom edge of the display, chosen by which triangle of
+    // the work area's two diagonals the drop point falls in.
+    snapOnDragDetach: bool
     }
 
 type ILicenseManager =
@@ -148,6 +153,10 @@ type IProgram =
     // postAction runs after the new window has been added to its new group.
     abstract member launchStandaloneWindow : string -> (IntPtr -> unit) -> unit
     abstract member getAllConfiguredProcessPaths : unit -> List2<string>
+    // Called after tabbing has been switched off for an application: the
+    // closed-tab records of anything no longer tabbed are dropped, so that
+    // switching it back on later starts clean.
+    abstract member forgetClosedTabsOfUntabbedApps : unit -> unit
     abstract member removeProcessSettings : string -> unit
     // Mark hwnds as just-placed-into-a-group so the next
     // removeUntabableWindows pass spares them even if their bounds are

@@ -52,8 +52,8 @@
   "EnableCtrlNumberHotKey": "Ctrl+1...+9 でタブ切り替えるで",
   "EnableHoverActivate": "マウス乗せたらタブ切り替わるで",
 
-  "TabPositionByDefault": "タブの位置",
-  "ChangeTabPositionOnSnap": "左右スナップ時のタブ位置",
+  "TabPositionByDefault": "タブの配置",
+  "ChangeTabPositionOnSnap": "左右スナップ時のタブ配置",
   "ChangeTabPositionOnSnapWhenUniform": "グループの全部のタブ位置が同じときに変える",
   "ChangeTabPositionOnSnapNever": "変えへん",
   "TabVerticalDirection": "タブの上下方向",
@@ -67,7 +67,9 @@
 
   "HideTabsOnFullscreen": "全画面ウィンドウの場合はタブを非表示にするで",
   "HideTabsWhileMoving": "ウィンドウ移動中はタブを非表示にするで",
+  "LockWindowPosition": "ウィンドウの移動や上端のサイズ変更はさせへん",
   "SnapTabHeightMargin": "スナップ時にタブの高さ分の余白をあけるで",
+  "SnapOnDragDetach": "タブ分離したとき落とした位置でスナップするで",
   "NextTab": "次のタブ",
   "PrevTab": "前のタブ",
 

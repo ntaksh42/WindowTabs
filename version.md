@@ -2,6 +2,30 @@
 
 **Language:** [Japanese/日本語](version_Japanese.md)
 
+## version ss_2026.09.18
+
+- This version marks ten thousand downloads (or thereabouts).
+- Added "Prevent moving windows and resizing them from the top".
+  - The title bar no longer starts a drag, and the top edge no longer resizes.
+  - It keeps a window from moving or resizing while its tabs are being used.
+  - An invisible band over the top border keeps the resize cursor from appearing, so the edge cannot be grabbed.
+  - Its height follows the scale of the display, so it still covers the border at 125% and above.
+  - Its height is measured from each window: how thick the border is differs between applications.
+  - The caption buttons and the top-left corner stay usable, measured per window.
+  - Some applications still move when dragged; those are put back where they were.
+- Tab menus open faster
+  - Right-clicking a tab no longer brings its group forward first, so the menu does not wait for every group to react
+- Added "Snap detached tabs by drop position".
+  - The display is quartered along its diagonals, and where the drop lands snaps the window to that half of it
+- Tab groups survive a spell with WindowTabs switched off
+  - The record of them is no longer overwritten while it is off, and switching it back on rebuilds them, even after a restart
+  - A start-up with the box ticked no longer rebuilds them behind it
+- Switching tabbing off for an application clears what it left behind
+- Tab tooltips no longer take keyboard focus from the application
+- A tabbed window left outside every monitor is put back on screen
+- Exiting no longer destroys the settings dialog from a thread that did not create it
+- The settings tabs line up on one row grid, the behaviour tab reads in order, and "tab position" is now "tab placement"
+
 ## version ss_2026.09.12
 
 - Reduce overhead by streamlining processing during startup and normal use.

@@ -52,8 +52,8 @@
   "EnableCtrlNumberHotKey": "Activer Ctrl+1, ...Ctrl+9 pour activer un onglet",
   "EnableHoverActivate": "Activer l'onglet au survol de la souris",
 
-  "TabPositionByDefault": "Position des onglets",
-  "ChangeTabPositionOnSnap": "Position des onglets lors de l'ancrage gauche/droite",
+  "TabPositionByDefault": "Placement des onglets",
+  "ChangeTabPositionOnSnap": "Placement des onglets lors de l'ancrage gauche/droite",
   "ChangeTabPositionOnSnapWhenUniform": "Changer quand tous les onglets du groupe partagent la même position",
   "ChangeTabPositionOnSnapNever": "Ne pas changer",
   "TabVerticalDirection": "Direction verticale des onglets",
@@ -67,7 +67,9 @@
 
   "HideTabsOnFullscreen": "Masquer les onglets quand la fenêtre est en plein écran",
   "HideTabsWhileMoving": "Masquer les onglets pendant le déplacement d'une fenêtre",
+  "LockWindowPosition": "Empêcher le déplacement des fenêtres et le redimensionnement par le haut",
   "SnapTabHeightMargin": "Ajouter une marge de hauteur d'onglet lors de l'ancrage",
+  "SnapOnDragDetach": "Ancrer au bord de l'écran en faisant glisser un onglet vers une nouvelle fenêtre",
   "NextTab": "Onglet suivant",
   "PrevTab": "Onglet précédent",
 

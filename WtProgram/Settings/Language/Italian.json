@@ -52,8 +52,8 @@
   "EnableCtrlNumberHotKey": "Abilita Ctrl+1, ...Ctrl+9 per attivare la scheda",
   "EnableHoverActivate": "Attiva la scheda al passaggio del mouse",
 
-  "TabPositionByDefault": "Posizione delle schede",
-  "ChangeTabPositionOnSnap": "Posizione schede all'aggancio sinistra/destra",
+  "TabPositionByDefault": "Disposizione delle schede",
+  "ChangeTabPositionOnSnap": "Disposizione schede all'aggancio sinistra/destra",
   "ChangeTabPositionOnSnapWhenUniform": "Cambia quando tutte le schede del gruppo hanno la stessa posizione",
   "ChangeTabPositionOnSnapNever": "Non cambiare",
   "TabVerticalDirection": "Direzione verticale delle schede",
@@ -67,7 +67,9 @@
 
   "HideTabsOnFullscreen": "Nascondi le schede quando la finestra è a schermo intero",
   "HideTabsWhileMoving": "Nascondi le schede durante lo spostamento di una finestra",
+  "LockWindowPosition": "Impedisci lo spostamento delle finestre e il ridimensionamento dal bordo superiore",
   "SnapTabHeightMargin": "Aggiungi margine per l'altezza delle schede all'aggancio",
+  "SnapOnDragDetach": "Aggancia al bordo dello schermo trascinando una scheda in una nuova finestra",
   "NextTab": "Scheda successiva",
   "PrevTab": "Scheda precedente",
 

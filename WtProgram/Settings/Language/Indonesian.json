@@ -52,8 +52,8 @@
   "EnableCtrlNumberHotKey": "Aktifkan Ctrl+1, ...Ctrl+9 untuk mengaktifkan tab",
   "EnableHoverActivate": "Aktifkan tab dengan mengarahkan mouse",
 
-  "TabPositionByDefault": "Posisi tab",
-  "ChangeTabPositionOnSnap": "Posisi tab saat snap kiri/kanan",
+  "TabPositionByDefault": "Penempatan tab",
+  "ChangeTabPositionOnSnap": "Penempatan tab saat snap kiri/kanan",
   "ChangeTabPositionOnSnapWhenUniform": "Ubah saat semua tab dalam grup memiliki posisi yang sama",
   "ChangeTabPositionOnSnapNever": "Jangan ubah",
   "TabVerticalDirection": "Arah vertikal tab",
@@ -67,7 +67,9 @@
 
   "HideTabsOnFullscreen": "Sembunyikan tab saat jendela layar penuh",
   "HideTabsWhileMoving": "Sembunyikan tab saat memindahkan jendela",
+  "LockWindowPosition": "Cegah pemindahan jendela dan pengubahan ukuran dari sisi atas",
   "SnapTabHeightMargin": "Tambahkan margin tinggi tab saat snap",
+  "SnapOnDragDetach": "Snap ke tepi layar saat menyeret tab keluar menjadi jendela baru",
   "NextTab": "Tab Berikutnya",
   "PrevTab": "Tab Sebelumnya",
 

@@ -9,6 +9,15 @@ open System.IO
 open System.Windows.Forms
 open Bemo.Win32.Forms
 
+// Keep tooltip display and mouse interaction from activating the window.
+type TabTooltipForm() =
+    inherit Form()
+    override this.ShowWithoutActivation = true
+    override this.CreateParams =
+        let parameters = base.CreateParams
+        parameters.ExStyle <- parameters.ExStyle ||| WindowsExtendedStyles.WS_EX_NOACTIVATE
+        parameters
+
 type ITabStripMonitor =
     abstract member tabClick : (MouseButton * Tab * TabPart * MouseAction * Pt) -> unit
     abstract member tabActivate : (Tab) -> unit
@@ -85,7 +94,7 @@ type TabStrip(monitor:ITabStripMonitor) as this =
     let hwndRef = ref IntPtr.Zero
     let isShrunkCell = Cell.create(false)
     // Tooltip implementation
-    let tooltipForm = new Form()
+    let tooltipForm = new TabTooltipForm()
     let tooltipLabel = new Label()
     let tooltipTimer = new Timer(Interval = 500)
     // Polling fallback for stuck tooltips: WM_MOUSELEAVE does not always fire
@@ -122,7 +131,8 @@ type TabStrip(monitor:ITabStripMonitor) as this =
         // Size and font are computed in device pixels for the strip's monitor;
         // WinForms must not apply its own scaling on top of them.
         tooltipForm.AutoScaleMode <- AutoScaleMode.None
-        tooltipForm.TopMost <- true
+        // Form.TopMost makes Framework SetVisibleCore explicitly focus the form.
+        // Raise it through native makeTopMost instead, which uses SWP_NOACTIVATE.
         // Set form opacity for modern look
         tooltipForm.Opacity <- 0.95
         
@@ -160,8 +170,9 @@ type TabStrip(monitor:ITabStripMonitor) as this =
         )
 
         tooltipHideTimer.Tick.Add(fun _ ->
-            this.tryHideTooltipIfCursorLeft()
-            this.validateHoverAgainstCursor())
+            PerfTrace.time "tooltipHideTick" (fun () ->
+                this.tryHideTooltipIfCursorLeft()
+                this.validateHoverAgainstCursor()))
         tooltipHideTimer.Start()
         
         layeredWindowCell.value <-
@@ -378,7 +389,8 @@ type TabStrip(monitor:ITabStripMonitor) as this =
                 if formBottom > work.bottom then
                     tooltipForm.Location <- new Point(tooltipForm.Location.X, tabScreenY - tooltipForm.Height - scaled 5))
 
-            tooltipForm.BringToFront()
+            // BringToFront activates top-level forms; preserve the application's focus.
+            _os.windowFromHwnd(tooltipForm.Handle).makeTopMost()
 
     member private this.processMouse(mouse) =
         match mouse with
@@ -514,7 +526,7 @@ type TabStrip(monitor:ITabStripMonitor) as this =
     
     member private this.update() =
         if this.visible then
-            this.window.update(this.render, this.location, this.alpha)
+            PerfTrace.time "stripRender" (fun () -> this.window.update(this.render, this.location, this.alpha))
         else this.window.hide()
     
     // No draw correction any more. The former applyDrawCorrection pre-compressed
@@ -1065,9 +1077,19 @@ type TabStrip(monitor:ITabStripMonitor) as this =
     // again, with the bounds it produced.
     member this.setTabAppearance(appearance, scale: float) =
         Cell.beginUpdate()
-        appearanceCell.set(Some(appearance))
-        scaleCell.set(scale)
+        if appearanceCell.value <> Some(appearance) then appearanceCell.set(Some(appearance))
+        if scaleCell.value <> scale then scaleCell.set(scale)
         Cell.endUpdate()
+
+    // Runs f with this strip's cell listeners held back, so the strip renders
+    // once for everything f changes. The strip has its own cell scope, so a
+    // WindowGroup update does not batch it: one foreground change in the
+    // system rendered every group's strip about eight times in a row (zorder,
+    // foreground, appearance, four placement cells, visibility).
+    member this.batch (f: unit -> 'a) : 'a =
+        Cell.beginUpdate()
+        try f()
+        finally Cell.endUpdate()
             
     member this.contentBounds 
         with get() = contentBoundsCell.value
@@ -1076,19 +1098,25 @@ type TabStrip(monitor:ITabStripMonitor) as this =
     member this.foreground 
         with get() = foregroundCell.value
         and set(value) =
-            prevForegroundCell.set(this.foreground)
-            foregroundCell.set(value) 
+            // Pushed on every foreground change in the system; setting the
+            // same tab again would only render the strip again.
+            if value <> this.foreground then
+                prevForegroundCell.set(this.foreground)
+                foregroundCell.set(value)
             
     member this.bounds = this.window.bounds
 
     member this.setPlacement(placement) =
-        showInsideCell.set(placement.showInside)
-        sizeCell.set(placement.bounds.size)
-        locationCell.set(placement.bounds.location)
-        // The scale that produced these bounds. It travels with the placement
-        // instead of being re-derived here so the decorator and the strip can
-        // never disagree about which monitor the strip is on.
-        scaleCell.set(placement.scale)
+        // The placement is pushed again on every foreground change, mostly
+        // unchanged: set only what differs, and render once for all of it.
+        this.batch <| fun () ->
+            if showInsideCell.value <> placement.showInside then showInsideCell.set(placement.showInside)
+            if sizeCell.value.record <> placement.bounds.size.record then sizeCell.set(placement.bounds.size)
+            if locationCell.value.record <> placement.bounds.location.record then locationCell.set(placement.bounds.location)
+            // The scale that produced these bounds. It travels with the placement
+            // instead of being re-derived here so the decorator and the strip can
+            // never disagree about which monitor the strip is on.
+            if scaleCell.value <> placement.scale then scaleCell.set(placement.scale)
 
     member this.alpha
         with get() = alphaCell.value
@@ -1096,7 +1124,7 @@ type TabStrip(monitor:ITabStripMonitor) as this =
 
     member this.visible 
         with get() = visibleCell.value
-        and set(value) = visibleCell.set(value)
+        and set(value) = if visibleCell.value <> value then visibleCell.set(value)
             
     member this.transparent 
         with get() = transparentCell.value

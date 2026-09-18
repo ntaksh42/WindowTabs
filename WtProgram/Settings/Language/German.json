@@ -52,8 +52,8 @@
   "EnableCtrlNumberHotKey": "Ctrl+1, ...Ctrl+9 zum Aktivieren von Tabs aktivieren",
   "EnableHoverActivate": "Tab durch Zeigen mit der Maus aktivieren",
 
-  "TabPositionByDefault": "Tab-Position",
-  "ChangeTabPositionOnSnap": "Tab-Position beim Andocken links/rechts",
+  "TabPositionByDefault": "Tab-Platzierung",
+  "ChangeTabPositionOnSnap": "Tab-Platzierung beim Andocken links/rechts",
   "ChangeTabPositionOnSnapWhenUniform": "Ändern, wenn alle Tabs der Gruppe dieselbe Position haben",
   "ChangeTabPositionOnSnapNever": "Nicht ändern",
   "TabVerticalDirection": "Vertikale Tab-Richtung",
@@ -67,7 +67,9 @@
 
   "HideTabsOnFullscreen": "Tabs im Vollbildmodus ausblenden",
   "HideTabsWhileMoving": "Tabs beim Verschieben eines Fensters ausblenden",
+  "LockWindowPosition": "Verschieben von Fenstern und Größenänderung an der Oberkante verhindern",
   "SnapTabHeightMargin": "Beim Andocken Rand für Tab-Höhe hinzufügen",
+  "SnapOnDragDetach": "Beim Herausziehen eines Tabs in ein neues Fenster am Bildschirmrand andocken",
   "NextTab": "Nächster Tab",
   "PrevTab": "Vorheriger Tab",
 

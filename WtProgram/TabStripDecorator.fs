@@ -157,6 +157,10 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
     let iconClickProtectUntil = ref System.DateTime.MinValue
     let iconClickHideProtection = System.TimeSpan.FromSeconds(1.0)
     let firstClickTab = ref None  // Track the tab that was clicked first in potential double-click
+    // What the last groupInfos entry was built from, so the periodic refresh
+    // rebuilds the icon bitmaps only when the tabs actually changed.
+    let mutable groupInfoSource : (IntPtr list * string list * obj * obj) option = None
+    let topEdgeGuard = TopEdgeGuard(os)
 
     // Explorer-like selection: was the MouseDown'd tab already part of the
     // selection (or the active tab)? If yes, MouseUp / dragEnd without drag
@@ -191,37 +195,50 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
                     tabs.list |> List.map (fun (Tab(hwnd)) -> hwnd)
                 let firstTabInfo =
                     if tabs.count > 0 then Some(this.ts.tabInfo(tabs.at(0))) else None
-                // 32 px, for menus drawn above 100%. Win32Menu resizes this to
-                // 16 px * the menu monitor's scale, so a scaled menu SHRINKS a
-                // large picture instead of stretching a 16 px one - which is
-                // precisely the blur this change removes everywhere else.
-                let firstTabIcon =
-                    firstTabInfo |> Option.bind (fun info ->
-                        try
-                            let source =
-                                if Object.ReferenceEquals(info.iconBig, SystemIcons.Application)
-                                then info.iconSmall else info.iconBig
-                            Some(ScaledIcon.at source 32 |> fun i -> i.ToBitmap().img.resize(Sz(32,32)))
-                        with _ -> None)
-                // The unchanged, pre-DPI-work expression. A 100% monitor must
-                // show the icon the application actually drew for 16 px, not a
-                // 32 px picture reduced to 16 - many applications simplify
-                // their small icon rather than scale it down, so the two are
-                // visibly different pictures, and "100% is untouched" has to
-                // hold for the context menu as well as for the strip.
-                let firstTabIconSmall =
-                    firstTabInfo |> Option.bind (fun info ->
-                        try Some(info.iconSmall.ToBitmap().img.resize(Sz(16,16)))
-                        with _ -> None)
-                let info = {
-                    hwnd = group.hwnd
-                    tabNames = tabNames
-                    tabCount = tabs.count
-                    firstTabIcon = firstTabIcon
-                    firstTabIconSmall = firstTabIconSmall
-                    tabHwnds = tabHwnds
-                }
-                lock groupInfos (fun () -> groupInfos.[group.hwnd] <- info)
+                let source =
+                    tabHwnds, tabNames,
+                    (firstTabInfo |> Option.map (fun info -> box info.iconSmall) |> Option.toObj),
+                    (firstTabInfo |> Option.map (fun info -> box info.iconBig) |> Option.toObj)
+                let unchanged =
+                    match groupInfoSource with
+                    | Some(hwnds, names, small, big) ->
+                        let (h, n, s, b) = source
+                        hwnds = h && names = n && Object.ReferenceEquals(small, s) && Object.ReferenceEquals(big, b)
+                        && lock groupInfos (fun () -> groupInfos.ContainsKey(group.hwnd))
+                    | None -> false
+                if not unchanged then
+                    groupInfoSource <- Some(source)
+                    // 32 px, for menus drawn above 100%. Win32Menu resizes this to
+                    // 16 px * the menu monitor's scale, so a scaled menu SHRINKS a
+                    // large picture instead of stretching a 16 px one - which is
+                    // precisely the blur this change removes everywhere else.
+                    let firstTabIcon =
+                        firstTabInfo |> Option.bind (fun info ->
+                            try
+                                let source =
+                                    if Object.ReferenceEquals(info.iconBig, SystemIcons.Application)
+                                    then info.iconSmall else info.iconBig
+                                Some(ScaledIcon.at source 32 |> fun i -> i.ToBitmap().img.resize(Sz(32,32)))
+                            with _ -> None)
+                    // The unchanged, pre-DPI-work expression. A 100% monitor must
+                    // show the icon the application actually drew for 16 px, not a
+                    // 32 px picture reduced to 16 - many applications simplify
+                    // their small icon rather than scale it down, so the two are
+                    // visibly different pictures, and "100% is untouched" has to
+                    // hold for the context menu as well as for the strip.
+                    let firstTabIconSmall =
+                        firstTabInfo |> Option.bind (fun info ->
+                            try Some(info.iconSmall.ToBitmap().img.resize(Sz(16,16)))
+                            with _ -> None)
+                    let info = {
+                        hwnd = group.hwnd
+                        tabNames = tabNames
+                        tabCount = tabs.count
+                        firstTabIcon = firstTabIcon
+                        firstTabIconSmall = firstTabIconSmall
+                        tabHwnds = tabHwnds
+                    }
+                    lock groupInfos (fun () -> groupInfos.[group.hwnd] <- info)
         with _ -> ()
 
     member private this.init() =
@@ -235,6 +252,21 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
         dropTarget.set(Some(OleDropTarget(this.ts)))
         
         this.initAutoHide()
+
+        // Other groups' tab menus list this group by the names and icon in
+        // groupInfos. Refreshing the entry here, on this group's own thread,
+        // lets a menu read it at once; the menu used to wait on every other
+        // group's thread while it was being built. Up to a second stale is
+        // fine for a menu label.
+        this.updateGroupInfo()
+        let groupInfoTimer = new System.Windows.Forms.Timer(Interval = 1000)
+        groupInfoTimer.Tick.Add(fun _ -> this.updateGroupInfo())
+        groupInfoTimer.Start()
+        // Stop and release the timer with the group: it owns a window of this
+        // group's thread, which goes away with the group.
+        group.exited.Add <| fun() ->
+            groupInfoTimer.Stop()
+            groupInfoTimer.Dispose()
 
         let capturedHwnd = ref None
 
@@ -306,8 +338,13 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
             this.invokeAsync <| fun() ->
                 this.updateTsPlacement()
 
+        Services.settings.notifyValue "lockWindowPosition" <| fun(_) ->
+            this.invokeAsync <| fun() ->
+                this.updateTopEdgeGuard()
+
         group.exited.Add <| fun() ->
             Services.dragDrop.unregisterTarget(this.ts.hwnd)
+            topEdgeGuard.dispose()
     
 
     member private this.tabSlide =
@@ -317,7 +354,47 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
     member private this.updateTsSlide() =
         this.ts.slide <- this.tabSlide
 
-    member private this.updateTsPlacement() =
+    // The invisible sliver over the window's top border (see TopEdgeGuard).
+    // It follows the same events as the strip, so it is updated from the same
+    // place, and it is only wanted while the setting is on and the tabs are
+    // drawn above the window rather than inside it.
+    member private this.updateTopEdgeGuard() =
+        try
+            let wanted =
+                (try Services.settings.getValue("lockWindowPosition") :?> bool with _ -> false) &&
+                group.bounds.value.IsSome &&
+                not this.ts.showInside &&
+                // Nothing to guard during a move or resize - the drag is
+                // already under way - and following the window frame by frame
+                // (position, size, repaint, z-order) is what made a top-edge
+                // resize crawl. The band comes back when the loop ends.
+                not group.isInMoveSizeThreadSafe
+            // Only the window in front decides the band: its own margin, not
+            // the group's. A group holding LINE and Chrome guards LINE's outer
+            // frame while LINE shows, and just Chrome's top border while
+            // Chrome does - Chrome is above LINE's frame windows then, so they
+            // cannot be reached anyway.
+            let marginTop =
+                match group.bounds.value with
+                | Some(b) ->
+                    (try
+                        let (top, _, _, _) = group.getExeMargin(group.topWindow, b)
+                        max 0 top
+                     with _ -> 0)
+                | None -> 0
+            // A UWP window (ApplicationFrameWindow) draws above ordinary owned
+            // windows, so the strip is made topmost while one of them is in
+            // front - see updateTsPlacement - and the band has to follow the
+            // same rule or it sinks behind the window it guards.
+            let uwpInFront =
+                group.windows.items.any(fun hwnd ->
+                    let window = os.windowFromHwnd(hwnd)
+                    window.className = "ApplicationFrameWindow" && hwnd = os.foreground.hwnd)
+            topEdgeGuard.update(wanted, group.topWindow, group.bounds.value, marginTop, uwpInFront,
+                                not group.isInMoveSizeThreadSafe)
+        with _ -> ()
+
+    member private this.updateTsPlacement() = this.ts.batch <| fun () ->
         if group.bounds.value.IsNone then
             this.ts.visible <- false
         else
@@ -354,6 +431,8 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
                     tsWindow.makeNotTopMost()
             else
                 tsWindow.makeNotTopMost()
+
+            this.updateTopEdgeGuard()
 
     member private this.invokeAsync f = group.invokeAsync f
     member private this.invokeSync f = group.invokeSync f
@@ -1091,50 +1170,19 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
         with | _ -> 0
 
     member private this.adjustWorkAreaForTabHeight(workArea: System.Drawing.Rectangle) =
-        let tabHeight = this.getTabHeightForSnap()
-        if tabHeight > 0 then
-            System.Drawing.Rectangle(workArea.X, workArea.Y + tabHeight, workArea.Width, workArea.Height - tabHeight)
-        else
-            workArea
+        let (x, y, width, height) =
+            SnapGeometry.reserveTabHeight (this.getTabHeightForSnap()) (workArea.X, workArea.Y, workArea.Width, workArea.Height)
+        System.Drawing.Rectangle(x, y, width, height)
 
     member private this.calculateSnapBounds(
         snapDirection: string,
         workArea: System.Drawing.Rectangle,
         currentWidth: int,
         currentHeight: int) : (int * int * int * int) =
-        // Returns (x, y, width, height) for snap position
-        // Snap right/left: maintain width, expand height to full
-        // Snap top/bottom: maintain height, expand width to full
+        // Keep-size menu geometry, also used for the drag staging position.
+        // Variant B uses the percentage helper below for its final rectangle.
         let workArea = this.adjustWorkAreaForTabHeight(workArea)
-        let clampedWidth = min currentWidth workArea.Width
-        let clampedHeight = min currentHeight workArea.Height
-        match snapDirection with
-        | "snapright" ->
-            let newWidth = clampedWidth
-            let newHeight = workArea.Height
-            let x = workArea.Right - newWidth
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snapleft" ->
-            let newWidth = clampedWidth
-            let newHeight = workArea.Height
-            let x = workArea.Left
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snaptop" ->
-            let newWidth = workArea.Width
-            let newHeight = clampedHeight
-            let x = workArea.Left
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snapbottom" ->
-            let newWidth = workArea.Width
-            let newHeight = clampedHeight
-            let x = workArea.Left
-            let y = workArea.Bottom - newHeight
-            (x, y, newWidth, newHeight)
-        | _ ->
-            (workArea.Left, workArea.Top, clampedWidth, clampedHeight)
+        SnapGeometry.snapBounds snapDirection (workArea.X, workArea.Y, workArea.Width, workArea.Height) currentWidth currentHeight
 
     member private this.calculateSnapBoundsWithPercent(
         snapDirection: string,
@@ -1148,78 +1196,8 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
                 this.adjustWorkAreaForTabHeight(System.Windows.Forms.SystemInformation.VirtualScreen)
             else
                 this.adjustWorkAreaForTabHeight(workArea)
-        let percentFloat = float(percent) / 100.0
-        match snapDirection with
-        | "snapright" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = workArea.Height
-            let x = workArea.Right - newWidth
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snapleft" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = workArea.Height
-            let x = workArea.Left
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snaptop" ->
-            let newWidth = workArea.Width
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Left
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snapbottom" ->
-            let newWidth = workArea.Width
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Left
-            let y = workArea.Bottom - newHeight
-            (x, y, newWidth, newHeight)
-        | "snaptopleft" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Left
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snaptopright" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Right - newWidth
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snapbottomleft" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Left
-            let y = workArea.Bottom - newHeight
-            (x, y, newWidth, newHeight)
-        | "snapbottomright" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Right - newWidth
-            let y = workArea.Bottom - newHeight
-            (x, y, newWidth, newHeight)
-        | "snapcenter" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Left + (workArea.Width - newWidth) / 2
-            let y = workArea.Top + (workArea.Height - newHeight) / 2
-            (x, y, newWidth, newHeight)
-        | "snapcenterhorizontal" ->
-            let newWidth = int(float(workArea.Width) * percentFloat)
-            let newHeight = workArea.Height
-            let x = workArea.Left + (workArea.Width - newWidth) / 2
-            let y = workArea.Top
-            (x, y, newWidth, newHeight)
-        | "snapcentervertical" ->
-            let newWidth = workArea.Width
-            let newHeight = int(float(workArea.Height) * percentFloat)
-            let x = workArea.Left
-            let y = workArea.Top + (workArea.Height - newHeight) / 2
-            (x, y, newWidth, newHeight)
-        | "snapmaximizedisplay" | "snapmaximizedesktop" ->
-            (workArea.Left, workArea.Top, workArea.Width, workArea.Height)
-        | _ ->
-            (workArea.Left, workArea.Top, workArea.Width, workArea.Height)
+        SnapGeometry.calculateSnapBoundsWithPercent snapDirection percent
+            (workArea.X, workArea.Y, workArea.Width, workArea.Height)
 
     member private this.detachTabToSnap(hwnd: IntPtr, snapDirection: string) =
         // This method is only called when group has multiple tabs (menu is disabled for single tab)
@@ -1496,19 +1474,12 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
     // alignment (in-place group snap updates the visible tabs; detach persists
     // it so the freshly formed group inherits it). tabHwnds are read from the
     // current group for the uniformity check, so this must run before detaching.
+    // The rule itself is SnapGeometry.realignment, shared with Desktop.dragDrop.
     member private this.applySnapRealign(tabHwnds: IntPtr list, snapDirection: string, setAlignAll: IntPtr list -> TabAlign -> unit) =
         if this.snapRealignEnabled() && not tabHwnds.IsEmpty then
-            let desiredOpt =
-                match snapDirection with
-                | "snapleft" -> Some TopLeft
-                | "snapright" -> Some TopRight
-                | _ -> None
-            match desiredOpt with
-            | Some desired ->
-                let allLeft = tabHwnds |> List.forall (fun h -> group.getTabAlign(h) = TopLeft)
-                let allRight = tabHwnds |> List.forall (fun h -> group.getTabAlign(h) = TopRight)
-                if allLeft || allRight then
-                    setAlignAll tabHwnds desired
+            let alignments = tabHwnds |> List.map group.getTabAlign
+            match SnapGeometry.realignment true snapDirection alignments TopLeft TopRight with
+            | Some desired -> setAlignAll tabHwnds desired
             | None -> ()
 
     // Realign the whole current group after an in-place left/right snap.
@@ -1896,27 +1867,9 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
 
         // Item 3: "New window (link to group)" submenu — launch as a new tab docked into an existing other group
         let newWindowLinkGroupItem =
-            let allDecorators = lock decorators (fun () ->
-                decorators.Values
-                |> List.ofSeq
-                |> List.filter (fun d ->
-                    try
-                        d.ts.hwnd <> IntPtr.Zero &&
-                        WinUserApi.IsWindow(d.group.hwnd) &&
-                        WinUserApi.IsWindow(d.ts.hwnd)
-                    with _ -> false))
+            // Other groups refresh their own entries (the timer in init);
+            // only this group's is brought up to date here.
             this.updateGroupInfo()
-            let updateTasks =
-                allDecorators
-                |> List.filter (fun d -> d.group.hwnd <> group.hwnd)
-                |> List.map (fun d ->
-                    async {
-                        try
-                            if WinUserApi.IsWindow(d.group.hwnd) && WinUserApi.IsWindow(d.ts.hwnd) then
-                                d.group.invokeSync(fun () -> d.updateGroupInfo())
-                        with _ -> ()
-                    })
-            updateTasks |> Async.Parallel |> Async.RunSynchronously |> ignore
             let otherGroupInfos = lock groupInfos (fun () ->
                 groupInfos.Values
                 |> List.ofSeq
@@ -2654,39 +2607,9 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
                 }) ]
 
         let moveTabGroupToGroupMenu =
-            // Update all group infos before building menu (same as moveTabMenu)
-            let allDecorators = lock decorators (fun () ->
-                decorators.Values
-                |> List.ofSeq
-                |> List.filter (fun d ->
-                    // Filter out invalid decorators
-                    try
-                        d.ts.hwnd <> IntPtr.Zero &&
-                        WinUserApi.IsWindow(d.group.hwnd) &&
-                        WinUserApi.IsWindow(d.ts.hwnd)
-                    with _ -> false
-                )
-            )
-
-            // First, update the current group's info synchronously
+            // Other groups refresh their own entries (the timer in init);
+            // only this group's is brought up to date here.
             this.updateGroupInfo()
-
-            // Update all other decorators' group info and wait for completion
-            let updateTasks =
-                allDecorators
-                |> List.filter (fun d -> d.group.hwnd <> group.hwnd)  // Skip current group (already updated)
-                |> List.map (fun d ->
-                    async {
-                        try
-                            // Double check the window is still valid
-                            if WinUserApi.IsWindow(d.group.hwnd) && WinUserApi.IsWindow(d.ts.hwnd) then
-                                d.group.invokeSync(fun () -> d.updateGroupInfo())
-                        with _ -> ()
-                    }
-                )
-
-            // Wait for all updates to complete
-            updateTasks |> Async.Parallel |> Async.RunSynchronously |> ignore
 
             // Now get the updated group infos
             let allGroupInfos = lock groupInfos (fun () ->
@@ -2799,39 +2722,9 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
             Some(CmiSeparator)
             // Tab Detach and Split submenu containing both detach and link menus
             (
-                // Update all group infos before building menus (shared by moveTabMenu and split menus)
-                let allDecorators = lock decorators (fun () ->
-                    decorators.Values
-                    |> List.ofSeq
-                    |> List.filter (fun d ->
-                        // Filter out invalid decorators
-                        try
-                            d.ts.hwnd <> IntPtr.Zero &&
-                            WinUserApi.IsWindow(d.group.hwnd) &&
-                            WinUserApi.IsWindow(d.ts.hwnd)
-                        with _ -> false
-                    )
-                )
-
-                // First, update the current group's info synchronously
+                // Other groups refresh their own entries (the timer in init);
+                // only this group's is brought up to date here.
                 this.updateGroupInfo()
-
-                // Update all other decorators' group info and wait for completion
-                let updateTasks =
-                    allDecorators
-                    |> List.filter (fun d -> d.group.hwnd <> group.hwnd)  // Skip current group (already updated)
-                    |> List.map (fun d ->
-                        async {
-                            try
-                                // Double check the window is still valid
-                                if WinUserApi.IsWindow(d.group.hwnd) && WinUserApi.IsWindow(d.ts.hwnd) then
-                                    d.group.invokeSync(fun () -> d.updateGroupInfo())
-                            with _ -> ()
-                        }
-                    )
-
-                // Wait for all updates to complete
-                updateTasks |> Async.Parallel |> Async.RunSynchronously |> ignore
 
                 // Now get the updated group infos (shared by all menus that need group info)
                 let allGroupInfos = lock groupInfos (fun () ->
@@ -3109,7 +3002,10 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
                 group.flashTab(tab, false)
                 match btn with
                 | MouseRight ->
-                    os.windowFromHwnd(group.topWindow).setForeground(false)
+                    // A right-click only opens the menu. Bringing the group
+                    // forward changed the foreground window, which every group
+                    // reacts to, and the menu waited behind all of that.
+                    ()
                 | MouseLeft ->
                     // Read modifier keys at click time for multi-tab selection.
                     //   plain   : Explorer-like behavior (see below)
@@ -3190,7 +3086,13 @@ type TabStripDecorator(group:WindowGroup, notifyDetached: IntPtr -> unit) as thi
                                       imageOffset = imageOffset
                                       tabInfo = tabInfo
                                       sourceGroupHwnd = group.hwnd
-                                      selectedHwnds = selectedSnapshot })
+                                      selectedHwnds = selectedSnapshot
+                                      sourceRestoreSize =
+                                          let window = os.windowFromHwnd(hwnd)
+                                          if window.isMaximized || window.isMinimized then window.placement.rcNormalPosition.size
+                                          else window.bounds.size
+                                      sourceSnapTabHeightMargin = group.snapTabHeightMargin
+                                      sourceTabAligns = (hwnd :: selectedSnapshot) |> List.map group.getTabAlign })
                             Services.dragDrop.beginDrag(this.ts.hwnd, dragImage, imageOffset, ptScreen, dragInfo)
                 | MouseMiddle ->
                     group.clearSelected()

@@ -593,8 +593,10 @@ type Settings(isStandAlone) as this =
                         hideTabsDelayMilliseconds = settingsJson.getInt32("HideTabsDelayMilliseconds").def(3000)
                         hideTabsOnFullscreen = settingsJson.getBool("HideTabsOnFullscreen").def(true)
                         hideTabsWhileMoving = settingsJson.getBool("HideTabsWhileMoving").def(false)
+                        lockWindowPosition = settingsJson.getBool("LockWindowPosition").def(false)
                         snapTabHeightMargin = settingsJson.getBool("SnapTabHeightMargin").def(false)
                         changeTabPositionOnSnap = settingsJson.getString("ChangeTabPositionOnSnap").def("change")
+                        snapOnDragDetach = settingsJson.getBool("SnapOnDragDetach").def(false)
                         version = settingsJson.getString("Version").def(String.Empty)
                         tabAppearance =
                             try
@@ -636,8 +638,10 @@ type Settings(isStandAlone) as this =
                         hideTabsDelayMilliseconds = 3000
                         hideTabsOnFullscreen = true
                         hideTabsWhileMoving = false
+                        lockWindowPosition = false
                         snapTabHeightMargin = false
                         changeTabPositionOnSnap = "change"
+                        snapOnDragDetach = false
                         version = String.Empty
                         tabAppearance = this.defaultTabAppearance
                     }
@@ -670,8 +674,10 @@ type Settings(isStandAlone) as this =
             settingsJson.setInt32("HideTabsDelayMilliseconds", settings.hideTabsDelayMilliseconds)
             settingsJson.setBool("HideTabsOnFullscreen", settings.hideTabsOnFullscreen)
             settingsJson.setBool("HideTabsWhileMoving", settings.hideTabsWhileMoving)
+            settingsJson.setBool("LockWindowPosition", settings.lockWindowPosition)
             settingsJson.setBool("SnapTabHeightMargin", settings.snapTabHeightMargin)
             settingsJson.setString("ChangeTabPositionOnSnap", settings.changeTabPositionOnSnap)
+            settingsJson.setBool("SnapOnDragDetach", settings.snapOnDragDetach)
             settingsJson.setStringArray("IncludedPaths", settings.includedPaths.items)
             settingsJson.setStringArray("ExcludedPaths", settings.excludedPaths.items)
             settingsJson.setStringArray("AutoGroupingPaths", settings.autoGroupingPaths.items)
